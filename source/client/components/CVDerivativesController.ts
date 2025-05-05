@@ -6,7 +6,7 @@ import CPulse, { IPulseContext, IPulseEvent } from "@ff/graph/components/CPulse"
 import Component from "@ff/graph/Component";
 import { EAssetType, EDerivativeQuality, EDerivativeUsage } from "client/schema/model";
 import CRenderer from "@ff/scene/components/CRenderer";
-import { Vector2, Vector3, Box3, Matrix4, Object3D, Quaternion } from "three";
+import { Vector2, Vector3, Box3, Matrix4, Object3D, Quaternion, Spherical, Plane, Camera, Box2 } from "three";
 import CTransform from "@ff/scene/components/CTransform";
 import CVNode from "./CVNode";
 import * as helpers from "@ff/three/helpers";
@@ -81,8 +81,11 @@ export function getQuality(current :EDerivativeQuality, relSize:number):EDerivat
 
 const _ndcBox = new Box3();
 const _localBox = new Box3();
+const _cameraXAxis = new Vector3();
 const _vec3a = new Vector3();
+const _vecSphericala = new Spherical();
 const _vec3b = new Vector3();
+const _vecSphericalb = new Spherical();
 const _quat = new Quaternion();
 const _mat4 = new Matrix4();
 const _cam_fwd = new Vector3(0, 0, 1);
@@ -142,6 +145,7 @@ export default class CVDerivativesController extends Component{
   private _fps = new PerfCounter(10, 60);
 
   private _budget = sizes[EDerivativeQuality.High]*2;
+  spherical: boolean= false;
 
   threshold(q :EDerivativeQuality){
     return this._budget - sizes[q]*2;
@@ -177,7 +181,7 @@ export default class CVDerivativesController extends Component{
   }
 
 
-  setTextureBudget = ()=>{
+  setTextureBudget = ()=> {
     // We expect scene performance to always be texture-limited.
     // For example a hundred untextured objects with 25k vertices each would pose absolutely no problem even to a low end mobile device. 
     // However a few 4k maps are enough to overload such a device's GPU and internet connection.
@@ -207,9 +211,11 @@ export default class CVDerivativesController extends Component{
     if (!this.ins.enabled.value || !cameraComponent) {
         return false;
     }
+    //We only recompute LOD every 20 frames
     if((context.frameNumber % 20) != 0){
       return false;
     }
+
     if((context.frameNumber % 120) == 0){
       if(this._fps.push(context.secondsElapsed, 120) < 40 && MIN_BUDGET < this._budget){
         this._budget = Math.max(MIN_BUDGET, this._budget - sizes[EDerivativeQuality.Low]);
@@ -223,9 +229,32 @@ export default class CVDerivativesController extends Component{
 
     let currently_loading = 0;
     const weights :Array<[string, any]>= [];
-    let collection :Array<ModelDisplayState> = this.getGraphComponents(CVModel2).map(model=>{
-      _ndcBox.makeEmpty();
+    const sphericalWeights :Array<[string, any]>= [];
+    let bloup = 0;
+    let faceDebug = (x) => (x== 12 || x==9) ;
+ //   console.log("La face observée est :", faceDebug);
+    let worldQuaternion = new Quaternion;
+    cameraComponent.camera.getWorldQuaternion(worldQuaternion)
+    _cameraXAxis.set(1,0,0);
+    _cameraXAxis.applyQuaternion(worldQuaternion);
+ //  console.log ("Camera x Axis : ", _cameraXAxis);
 
+    let box = new Box3 (new Vector3 (0, 0, 0), new Vector3 (0, 1, 1));
+    let box2 = new Box3 (new Vector3 (0, 0, -2), new Vector3 (1, 0, -1));
+
+//    let flatBox = new Box3 (new Vector3 (-1, 0, 0), new Vector3 (1, 0, 1));
+//    let plane = new Plane (new Vector3(0,1,0),0);
+//   let plane2 = new Plane (new Vector3(1,0,0),0.5);
+//    console.log("box/plane intersect : ", box.intersectsPlane(plane), plane.intersectsBox(box));
+//   console.log("box/plane intersect2 : ", box2.intersectsPlane(plane2));
+//    console.log("flatBox/plane intersect : ", flatBox.intersectsPlane(plane), plane.intersectsBox(flatBox));
+
+
+    let collection :Array<ModelDisplayState> = this.getGraphComponents(CVModel2).map(model=>{
+      bloup = bloup + 1;
+      _ndcBox.makeEmpty();
+      let sphericalCoordinates: Array<Spherical>= [];
+      box
       //We can't just use the model's matrixWorld here because it might not have loaded yet.
       //In this case the bounding box is whatever's defined in the scene file.
       const scale = model.outs.unitScale.value;
@@ -269,6 +298,40 @@ export default class CVDerivativesController extends Component{
           }
       });
 
+      ///// ============GETTING SPHERICAL COORDINATES OF THE BOX ============
+      let cameraPosition = new Vector3;
+      cameraComponent.camera.getWorldPosition(cameraPosition);
+      [
+        [_localBox.min.x, _localBox.min.y, _localBox.min.z],
+        [_localBox.max.x, _localBox.min.y, _localBox.min.z],
+        [_localBox.max.x, _localBox.max.y, _localBox.min.z],
+        [_localBox.max.x, _localBox.max.y, _localBox.max.z],
+        [_localBox.min.x, _localBox.max.y, _localBox.max.z],
+        [_localBox.min.x, _localBox.min.y, _localBox.max.z],
+        [_localBox.max.x, _localBox.min.y, _localBox.max.z],
+        [_localBox.min.x, _localBox.max.y, _localBox.min.z],
+      ].map((coords:[x: number,y:  number,z: number], index)=>{
+
+          _vec3a.set(...coords).sub(cameraPosition);
+          let worldQuaternion = new Quaternion;
+          cameraComponent.camera.getWorldQuaternion(worldQuaternion);
+          _vec3a.applyQuaternion(worldQuaternion.conjugate())
+
+          _vecSphericala.setFromVector3(_vec3a);
+          sphericalCoordinates.push(_vecSphericala.clone())
+          if (faceDebug (bloup) ){
+   //         console.log ("=========================================================");
+            console.log("cartesian rotated coordinates with camera quaternion conjugate :", _vec3a.clone());
+            console.log(" coordonnées sphériques :",  _vecSphericala.clone());
+         }
+
+        });
+
+      if (faceDebug (bloup)){
+        console.log("coordonnées camera : ", cameraPosition);
+      }
+      /// ==========================^^^^^^^^^^===================================
+
       cameraComponent.camera.getWorldPosition(_vec3a);
       //Best-case distance
       let distance =  _localBox.distanceToPoint(_vec3a)/cameraComponent.camera.far;
@@ -279,7 +342,116 @@ export default class CVDerivativesController extends Component{
           (_ndcBox.min.y < 0 && 0 < _ndcBox.max.y)?0: Math.min(Math.abs(_ndcBox.max.y), Math.abs(_ndcBox.min.y)),
           _ndcBox.max.z,
         );
-        angle = _vec3a.angleTo(_ndc_fwd);
+        angle = _vec3a.angleTo(_ndc_fwd); // angle minimal par rapport à la boite
+      }
+      ////====================== box camera distance  =============================
+      const cameraMatrix = Camera
+     // let cameraPosition = new Vector3
+      //cameraComponent.camera.getWorldPosition(cameraPosition)
+      let boxCameraDistance = distance;
+      let sphericalDistanceWeight = 1;
+      let sphericalAngularArea = 1;
+      let sphericalAngularDistance = Infinity;
+      if (boxCameraDistance > 0){
+        if (faceDebug (bloup) ){
+//         console.log("localBox", {x_max: _localBox.max.x, y_max: _localBox.max.y, z_max: _localBox.max.z}, {x_min: _localBox.min.x, y_min: _localBox.min.y, z_min: _localBox.min.z});
+//          console.log("fwd camera", _cam_fwd);
+//          console.log("Camera position",{x:cameraPosition.x, y:cameraPosition.y, z:cameraPosition.z} );
+//         console.log("Spherical coordinates theta", sphericalCoordinates[0].theta, sphericalCoordinates[1].theta,sphericalCoordinates[2].theta, sphericalCoordinates[3].theta)
+ }
+        //// =================== Calculate angle differences ========================
+        // The box does NOT include the camera 
+        // To measure how the object circular arcs are distant from the center of the camera. 
+
+        // Theta angle
+        let maxTheta = Math.max(...sphericalCoordinates.map((point: Spherical)=> point.theta));
+        let minTheta = Math.min(...sphericalCoordinates.map((point: Spherical)=> point.theta));
+        let thetaAngle = maxTheta - minTheta;
+        //let thetaDistance = new Box2(new Vector2(maxTheta, 1), new Vector2(minTheta, -1)).distanceToPoint(new Vector2(Math.PI,0)); // Did not find an interval implementation in threeJS
+        let thetaDistance = Math.PI - Math.max(Math.abs(maxTheta), Math.abs(minTheta));
+        if (faceDebug(bloup)){
+          console.log("maxTheta :", maxTheta, " - minTheta : ", minTheta, " - thetaAngle : ", thetaAngle);
+        }
+
+
+        
+        // check if the box is across the half plane where changes sign and z < 0 (ie seen by the camera)
+        // local box is in world coordinates
+        const boxMinInCameraCoordinates = new Vector3(_localBox.min.x,_localBox.min.y, _localBox.min.z);
+        boxMinInCameraCoordinates.sub(cameraPosition).applyQuaternion(worldQuaternion.conjugate());
+        const isBoxAcrossThetaHalfPlane: boolean = _localBox.intersectsPlane(new Plane(_cameraXAxis,-_cameraXAxis.dot(cameraPosition))) && (boxMinInCameraCoordinates.z < 0);
+        if (faceDebug(bloup)){
+/*          console.log("box : ", {min_x: _localBox.min.x, min_y: _localBox.min.y, min_z:_localBox.min.z, max_x: _localBox.max.x, max_y: _localBox.max.y, max_z: _localBox.max.z});
+          console.log(boxMinInCameraCoordinates)
+          console.log("isBoxAcrossThetaHalfPlane: ", isBoxAcrossThetaHalfPlane);
+//          console.log(_localBox.min.clone().applyQuaternion(worldQuaternion.conjugate()).z );
+      /*    console.log("box : ", {min_x: _localBox.min.x, min_y: _localBox.min.y, min_z:_localBox.min.z, max_x: _localBox.max.x, max_y: _localBox.max.y, max_z: _localBox.max.z});
+          let cameraThetaPlane = new Plane(_cameraXAxis,-_cameraXAxis.dot(cameraPosition));
+          console.log("Plane : x :", cameraThetaPlane.normal.x, cameraThetaPlane.normal.y, cameraThetaPlane.normal.z, "constante : ", cameraThetaPlane.constant);
+          console.log("Camera position :", cameraPosition.x, cameraPosition.y, cameraPosition.z);
+          console.log(_localBox.intersectsPlane(cameraThetaPlane));
+          console.log(_localBox.min.dot(cameraThetaPlane.normal), _localBox.max.dot(cameraThetaPlane.normal));*/
+        }
+        if (isBoxAcrossThetaHalfPlane){ 
+          let maxThetaNeg = Math.max(...sphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
+          let minThetaPos = Math.min(...sphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
+          thetaAngle = 2*Math.PI - minThetaPos + maxThetaNeg; 
+          thetaDistance = 0;
+          if (faceDebug(bloup)){//
+//              console.log("maxThetaNeg :", maxThetaNeg, " - minThetaPos : ", minThetaPos, " - thetaAngle : ", thetaAngle);
+//               console.log("box ", bloup.toString()," across half plane, thetaAngle :", thetaAngle);
+          }
+        };
+
+        //Phi angle
+        let phiAngle = 0;
+        let phiDistance = Math.PI/2; 
+
+        // check if the y axis goes trough the box
+        /*
+        let zCameraAxis = new Vector3(0,0,1);
+        zCameraAxis.applyQuaternion(worldQuaternion.conjugate());
+        const yAxisThroughTheBox: boolean = _localBox.intersectsPlane(new Plane(_cameraXAxis, -_cameraXAxis.dot(cameraPosition))) && _localBox.intersectsPlane(new Plane(zCameraAxis,-zCameraAxis.dot(cameraPosition))); // Maybe rewrite with Ray?
+        if (yAxisThroughTheBox){ // if it goes through the box (we know the camera is NOT IN the box)
+          if (sphericalCoordinates[0].phi < Math.PI/2){ // Case where the box is above
+            if(faceDebug(bloup)) {
+                console.log("Is above");
+            }
+            let maxPhi1 = Math.max(...sphericalCoordinates.filter((point:Spherical)=> point.theta>0).map((point: Spherical)=> point.phi)); 
+            let maxPhi2 = Math.max(...sphericalCoordinates.filter((point:Spherical)=> point.theta<0).map((point: Spherical)=> point.phi));
+            phiAngle = maxPhi1 + maxPhi2
+            phiDistance = new Box2(new Vector2(maxPhi1, 0), new Vector2(maxPhi2, 0)).distanceToPoint(new Vector2(Math.PI/2,0)); // Did not find an interval implementation in threeJS
+          } else { // Case where the box is below
+            if(faceDebug(bloup)) {
+              console.log("Is below");
+          }
+            let minPhi1 = Math.min(...sphericalCoordinates.filter((point:Spherical)=> point.theta>0).map((point: Spherical)=> point.phi)); // Case where the box is above
+            let minPhi2 = Math.min(...sphericalCoordinates.filter((point:Spherical)=> point.theta<0).map((point: Spherical)=> point.phi));
+            phiAngle = Math.PI - (minPhi1 + minPhi2)
+            phiDistance = new Box2(new Vector2(minPhi1, 0), new Vector2(minPhi2, -0)).distanceToPoint(new Vector2(Math.PI/2,0)); // Did not find an interval implementation in threeJS
+            
+          }
+        }
+        else {*/
+
+          let maxPhi = Math.max(...sphericalCoordinates.map((point: Spherical)=> point.phi));
+          let minPhi = Math.min(...sphericalCoordinates.map((point: Spherical)=> point.phi));
+          phiAngle = maxPhi - minPhi;
+          phiDistance = new Box2(new Vector2(minPhi, 0), new Vector2(maxPhi, 0)).distanceToPoint(new Vector2(Math.PI/2,0)); // Did not find an interval implementation in threeJS;
+        //};
+        sphericalAngularArea = Math.abs(phiAngle * thetaAngle) /// (4 * Math.PI**2); // We normalize to be closer to the previous kind of values provided by ndc/ncc
+
+        const angleMod = 1 - Math.abs(angle)/Math.PI;
+        sphericalAngularDistance = new Vector2(thetaDistance, phiDistance).length();
+        if (faceDebug(bloup)) {
+          console.log("angles",{bloup: bloup, phiAngle: phiAngle, thetaAngle: thetaAngle, phiDistance: phiDistance, thetaDistance, sphericalAngularDistance: sphericalAngularDistance});
+        }
+
+        
+      } else{
+        //Priority is maximal if camera is inside the bounding box
+        console.log("inside the Box");
+        sphericalDistanceWeight = 1;
       }
 
       //_localBox.getSize(_vec3a);
@@ -293,6 +465,20 @@ export default class CVDerivativesController extends Component{
       weights.push([model.ins.name.value, {distance, angle, depthMod, angleMod, visibleSize}]);
 
       const weight = depthMod*angleMod;
+      
+
+      ///======================== Spherical version===================================
+      //const sphericalAngleMod = sphericalAngularArea // TODO here => faire une formule de poids propre
+      const sphericalAngleMod = (1 - Math.abs(sphericalAngularDistance/Math.sqrt(Math.PI**2 + Math.PI**2)));
+      let newWeight = depthMod * sphericalAngularArea * sphericalAngleMod
+      // console.log("Spherical LOD : Distance modifier :", depthMod.toString());
+      // console.log("Spherical LOD : Angular area :", sphericalAngularArea.toString());
+      // console.log("Spherical LOD : Field of view modifier on angular area", sphericalFieldOfViewWeight.toString());
+      //let sphericalWeight = depthMod * sphericalAngularArea ;
+      console.log("Spherical LOD n°", bloup.toString(), ":", {depthMod: depthMod, sphAngArea: sphericalAngularArea,sphAngDistance: sphericalAngularDistance, newWeight: newWeight, previousWeigh: weight, sphAngMod: sphericalAngleMod})
+
+//      console.log("Spherical LOD : Weight :", sphericalWeight.toString(), "Previous LOD : Weight :", weight.toString());
+      //// ==========================^^^^^^^^^^===================================
 
       //Upgrade only here
       let qualityRequest =  model.derivatives.select(EDerivativeUsage.Web3D, getQuality(model.ins.quality.value, visibleSize))?.data.quality;
