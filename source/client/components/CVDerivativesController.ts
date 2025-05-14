@@ -79,8 +79,7 @@ export function getQuality(current :EDerivativeQuality, relSize:number):EDerivat
   })?.[1] ?? EDerivativeQuality.High;
 }
 
-const _ndcBox = new Box3();
-const _localBox = new Box3(); // i world coordi
+const _localBox = new Box3(); // in world coordinates
 const _cameraXAxis = new Vector3();
 const _cameraYAxis = new Vector3();
 const _vec3a = new Vector3();
@@ -92,6 +91,7 @@ const _mat4 = new Matrix4();
 const _cam_fwd = new Vector3(0, 0, 1);
 const _ndc_fwd = new Vector3(0, 0, 1);
 const quaternion90AroundZ = new Quaternion().setFromEuler(new Euler(0,0,Math.PI/2));
+const quaternionMinus90AroundZ = quaternion90AroundZ.clone().conjugate();
 
 /**
  * Simple moving average basic implementation
@@ -239,37 +239,22 @@ export default class CVDerivativesController extends Component{
     const worldToCameraQuaternion = cameraToWorldQuaternion.clone().conjugate();
     _cameraYAxis.set(0,1,0).applyQuaternion(cameraToWorldQuaternion);
     quaternion90AroundZ.setFromEuler(new Euler(0,0,Math.PI/2));
-//    console.log ("Y Axis + z rotation: ", _cameraYAxis.clone().set(0,1,0).applyQuaternion(quaternion90AroundZ));
-
-
-//    let box = new Box3 (new Vector3 (0, 0, 0), new Vector3 (0, 1, 1));
-//    let box2 = new Box3 (new Vector3 (0, 0, -2), new Vector3 (1, 0, -1));
-
-//    let flatBox = new Box3 (new Vector3 (-1, 0, 0), new Vector3 (1, 0, 1));
-//    let plane = new Plane (new Vector3(0,1,0),0);
-//   let plane2 = new Plane (new Vector3(1,0,0),0.5);
-//    console.log("box/plane intersect : ", box.intersectsPlane(plane), plane.intersectsBox(box));
-//   console.log("box/plane intersect2 : ", box2.intersectsPlane(plane2));
-//    console.log("flatBox/plane intersect : ", flatBox.intersectsPlane(plane), plane.intersectsBox(flatBox));
+    const boxCenterInCamera = new Vector3; 
 
 
     let collection :Array<ModelDisplayState> = this.getGraphComponents(CVModel2).map(model=>{
-      _ndcBox.makeEmpty();
       let sphericalCoordinates: Array<Spherical>= [];
       let rotatedSphericalCoordinates: Array<Spherical>= [];
       let facingSphericalCoordinates: Array<Spherical>= [];
       let facingrotatedSphericalCoordinates: Array<Spherical>= [];
       const cameraToFacingBoxQuaternion = new Quaternion;
       const facingBoxToCameraQuaternion = new Quaternion;
-      //const faceBoxQuaternion = new Quaternion;
+
       //We can't just use the model's matrixWorld here because it might not have loaded yet.
       //In this case the bounding box is whatever's defined in the scene file.
       const scale = model.outs.unitScale.value;
       let t :CTransform|CVNode = model.transform;
       _localBox.copy(model.localBoundingBox);
-      //_localBox.min.multiplyScalar(scale);
-      //_localBox.max.multiplyScalar(scale);
-      const boxCenterInCamera = new Vector3; 
  
       _vec3a.fromArray(model.ins.position.value).multiplyScalar(scale);
       helpers.degreesToQuaternion(model.ins.rotation.value, CVModel2.rotationOrder, _quat);
@@ -283,32 +268,8 @@ export default class CVDerivativesController extends Component{
         t = t.parent as CTransform|CVNode;
       }
       let clipped = true;
-      //Ideally we use NDC (Normalized Display Coordinates) to compute the perceived size of an object on-screen
-      //The thing with NDC is they are crap at representing objects that are on the side of the camera
-      //They tends to have infinite (X,Y) sizes that don't make any sense
-      //Additionally it's hard to make sense of objects that crosses the camera's cross plane.
-      [
-        [_localBox.min.x, _localBox.min.y, _localBox.min.z],
-        [_localBox.max.x, _localBox.min.y, _localBox.min.z],
-        [_localBox.max.x, _localBox.max.y, _localBox.min.z],
-        [_localBox.max.x, _localBox.max.y, _localBox.max.z],
-        [_localBox.min.x, _localBox.max.y, _localBox.max.z],
-        [_localBox.min.x, _localBox.min.y, _localBox.max.z],
-        [_localBox.max.x, _localBox.min.y, _localBox.max.z],
-        [_localBox.min.x, _localBox.max.y, _localBox.min.z],
-      ].forEach((coords:[number, number, number], index)=>{
-          _vec3a.set(...coords).project(cameraComponent.camera);
-          if(/*cameraComponent.camera.near < _vec3a.z &&*/ _vec3a.z < 1){
-            if(Math.abs(_vec3a.x) < 1 && Math.abs(_vec3a.y) < 1){
-              clipped = false;
-            }
-            _ndcBox.expandByPoint(_vec3a);
-          }
-      });
 
-      ///// ============GETTING SPHERICAL COORDINATES OF THE BOX ============
-
-
+      ///// ============ SPHERICAL COORDINATES OF THE BOX ============
       let cameraPosition = new Vector3;
       cameraComponent.camera.getWorldPosition(cameraPosition);
       [
@@ -321,75 +282,63 @@ export default class CVDerivativesController extends Component{
         [_localBox.max.x, _localBox.min.y, _localBox.max.z],
         [_localBox.min.x, _localBox.max.y, _localBox.min.z],
       ].map((coords:[x: number,y:  number,z: number], index)=>{
+          // Future optimisation : calculate only thetas and not all spherical coordinates :
 
           _vec3a.set(...coords).sub(cameraPosition);
           cameraComponent.camera.getWorldQuaternion(cameraToWorldQuaternion);
           _vec3a.applyQuaternion(worldToCameraQuaternion); 
 
+          // spherical coordinates for theta1, horizontal regarding to camera
           _vecSphericala.setFromVector3(_vec3a);
           sphericalCoordinates.push(_vecSphericala.clone())
 
-
-          const _vecRotatedAroundZ = _vec3a.clone().applyQuaternion(quaternion90AroundZ.clone().conjugate()); 
+          // spherical coordinates for theta2, vertical regarding to camera
+          const _vecRotatedAroundZ = _vec3a.clone().applyQuaternion(quaternionMinus90AroundZ); 
           _vecSphericalb.setFromVector3(_vecRotatedAroundZ);
           rotatedSphericalCoordinates.push(_vecSphericalb.clone());
+        
+          // create quaternions for a basis facing the box from the camera point :
+          _localBox.getCenter(_vec3b);
+          _vec3b.sub(cameraPosition);
+          _vec3b.applyQuaternion(worldToCameraQuaternion); 
+          boxCenterInCamera.copy(_vec3b);
 
+          cameraToFacingBoxQuaternion.setFromUnitVectors(boxCenterInCamera.clone().normalize(), new Vector3(0,0,-1));
+          facingBoxToCameraQuaternion.copy(cameraToFacingBoxQuaternion).conjugate();
 
-        //=================  Theta 3 and 4,  facing the box ================
-        _localBox.getCenter(_vec3b);
+          //  spherical coordinates for theta3, horizontal when facing the box
+          const boxFacingCoordinates = _vec3a.clone().applyQuaternion(cameraToFacingBoxQuaternion);
+          _vecSphericalb.setFromVector3(boxFacingCoordinates);
+          facingSphericalCoordinates.push(_vecSphericalb.clone());
 
-        _vec3b.sub(cameraPosition);
-        _vec3b.applyQuaternion(worldToCameraQuaternion); 
-        boxCenterInCamera.copy(_vec3b);
-
- 
-        cameraToFacingBoxQuaternion.setFromUnitVectors(boxCenterInCamera.clone().normalize(), new Vector3(0,0,-1));
-        facingBoxToCameraQuaternion.copy(cameraToFacingBoxQuaternion).conjugate();
-        const boxFacingCoordinates = _vec3a.clone().applyQuaternion(cameraToFacingBoxQuaternion);
-        _vecSphericalb.setFromVector3(boxFacingCoordinates);
-        facingSphericalCoordinates.push(_vecSphericalb.clone());
-
-        const boxFacingSphericalCoordinatesRotated = boxFacingCoordinates.clone().applyQuaternion(quaternion90AroundZ.clone().conjugate()); 
-        _vecSphericalb.setFromVector3(boxFacingSphericalCoordinatesRotated);
-        facingrotatedSphericalCoordinates.push(_vecSphericalb.clone());
-
-        // ===============  ^^^ theta 3 and 4 ^^^ ============
+          //  spherical coordinates for theta4, vertical when facing the box
+          const boxFacingSphericalCoordinatesRotated = boxFacingCoordinates.clone().applyQuaternion(quaternionMinus90AroundZ); 
+          _vecSphericalb.setFromVector3(boxFacingSphericalCoordinatesRotated);
+          facingrotatedSphericalCoordinates.push(_vecSphericalb.clone());
         });
-           /// ==========================^^^^^^^^^^===================================
 
       cameraComponent.camera.getWorldPosition(_vec3a);
       //Best-case distance
-      let distance =  _localBox.distanceToPoint(_vec3a)/cameraComponent.camera.far;
-      let angle = 0;
-      if(distance != 0){
-        _vec3a.set(
-          (_ndcBox.min.x < 0 && 0 < _ndcBox.max.x)? 0: Math.min(Math.abs(_ndcBox.max.x), Math.abs(_ndcBox.min.x)),
-          (_ndcBox.min.y < 0 && 0 < _ndcBox.max.y)?0: Math.min(Math.abs(_ndcBox.max.y), Math.abs(_ndcBox.min.y)),
-          _ndcBox.max.z,
-        );
-        angle = _vec3a.angleTo(_ndc_fwd); // angle minimal par rapport à la boite
-      }
+      const distance =  _localBox.distanceToPoint(_vec3a)/cameraComponent.camera.far;
+
       ////====================== box camera distance  =============================
-      const cameraMatrix = Camera
-     // let cameraPosition = new Vector3
-      //cameraComponent.camera.getWorldPosition(cameraPosition)
+      
+      // Default values in case we are inside the box :
+      let sphericalAngularArea = (2*Math.PI)**2;
+      let sphericalAngularDistance = 0;
       let boxCameraDistance = distance;
-      let sphericalDistanceWeight = 1;
-      let sphericalAngularArea = 1;
-      let sphericalAngularDistance = Infinity;
       if (boxCameraDistance > 0){
  
         //// =================== Calculate angle differences ========================
         // The box does NOT include the camera 
         // To measure how the object circular arcs are distant from the center of the camera. 
 
-        // =============== Theta angle ===============================
+        // =============== Theta1 angle ===============================
         // pb when object below or above camera -> pi
         // used now only for distance 
         let maxTheta = Math.max(...sphericalCoordinates.map((point: Spherical)=> point.theta));
         let minTheta = Math.min(...sphericalCoordinates.map((point: Spherical)=> point.theta));
-  //      let thetaAngle = maxTheta - minTheta;
-        //let thetaDistance = new Box2(new Vector2(maxTheta, 1), new Vector2(minTheta, -1)).distanceToPoint(new Vector2(Math.PI,0)); // Did not find an interval implementation in threeJS
+
         let thetaDistance = Math.PI - Math.max(Math.abs(maxTheta), Math.abs(minTheta));
 
         
@@ -401,9 +350,10 @@ export default class CVDerivativesController extends Component{
         if (isBoxAcrossThetaHalfPlane){ 
           thetaDistance = 0;
         };
+
         // ========== Theta angle 2 ============
         // rotated 90° z --- pb when object below or above camera -> pi
-        // used only for distance */
+        // Also used only for distance */
         let maxTheta2 = Math.max(...rotatedSphericalCoordinates.map((point: Spherical)=> point.theta));
         let minTheta2 = Math.min(...rotatedSphericalCoordinates.map((point: Spherical)=> point.theta));
         //let thetaAngle2 = maxTheta2 - minTheta2;
@@ -417,120 +367,29 @@ export default class CVDerivativesController extends Component{
         //=================  Theta 3 and 4,  facing the box ================
         _localBox.getCenter(_vec3a);
         _vec3a.sub(cameraPosition);
-        _vec3a.applyQuaternion(worldToCameraQuaternion); 
-        const boxCenterInCamera = _vec3a.clone(); // in camera coordinates
-
-        cameraToFacingBoxQuaternion.setFromUnitVectors(boxCenterInCamera.clone().normalize(), new Vector3(0,0,-1)); // rotation from camera repere to facing box repere
-        facingBoxToCameraQuaternion.copy(cameraToFacingBoxQuaternion).conjugate();
- 
-        let maxTheta3 = Math.max(...facingSphericalCoordinates.map((point: Spherical)=> point.theta));
-        let minTheta3 = Math.min(...facingSphericalCoordinates.map((point: Spherical)=> point.theta));
-        let thetaAngle3 = maxTheta3 - minTheta3;
-        let thetaDistance3 = Math.PI - Math.max(Math.abs(maxTheta3), Math.abs(minTheta3));
-        /*_cameraXAxis.set(1,0,0);
-    _cameraXAxis.applyQuaternion(worldQuaternion);
- */
-        const newXaxis = new Vector3;
-        newXaxis.set(1,0,0);
-        newXaxis.applyQuaternion(facingBoxToCameraQuaternion).applyQuaternion(cameraToWorldQuaternion); //X axis looking at the box in world coordinates
-        const isBoxAcrossTheta3HalfPlane: boolean = _localBox.intersectsPlane(new Plane(newXaxis,-newXaxis.dot(cameraPosition))) && (boxMinInCameraCoordinates.clone().applyQuaternion(cameraToFacingBoxQuaternion).z < 0);
-
-        if (isBoxAcrossTheta3HalfPlane){ 
-          let maxTheta3Neg = Math.max(...facingSphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
-          let minTheta3Pos = Math.min(...facingSphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
-          thetaAngle3 = 2*Math.PI - minTheta3Pos + maxTheta3Neg; 
-          thetaDistance3 = 0;
-        } else { // TODO : gérer le cas oùon est proche de manière rasante de l'objet sans être dans la boite. On peut avoir z<0.
-//          if (faceDebug(bloup)){
-//            console.log("T3 - This SHOULD NOT HAPPPEN : isBoxAcrossTheta3HalfPlane", isBoxAcrossTheta3HalfPlane, "bloup :",bloup);
-            console.log({newXaxis: newXaxis , boxCenterInCamera: boxCenterInCamera, boxCenterInCRot: boxCenterInCamera.clone().applyQuaternion(cameraToFacingBoxQuaternion)});
-            console.log("intersection : ", _localBox.intersectsPlane(new Plane(newXaxis,-newXaxis.dot(cameraPosition))));
-            console.log("z < 0", boxMinInCameraCoordinates.clone().applyQuaternion(cameraToFacingBoxQuaternion).z < 0);
-            console.log("boxMinInCameraCoordinates facing box", boxMinInCameraCoordinates.clone().applyQuaternion(cameraToFacingBoxQuaternion));
-            //console.log({faceBoxQuaternionConjug: cameraToFacingBoxQuaternion.clone().conjugate()});
-            // Normalement ça marche toujours ?
-            let maxTheta3Neg = Math.max(...facingSphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
-            let minTheta3Pos = Math.min(...facingSphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
-            thetaAngle3 = 2*Math.PI - minTheta3Pos + maxTheta3Neg; 
-            thetaDistance3 = 0;
-//          }
-        };
-
-
-
-        let maxTheta4 = Math.max(...facingrotatedSphericalCoordinates.map((point: Spherical)=> point.theta));
-        let minTheta4 = Math.min(...facingrotatedSphericalCoordinates.map((point: Spherical)=> point.theta));
-        let thetaAngle4 = maxTheta4 - minTheta4;
-        let thetaDistance4 = Math.PI - Math.max(Math.abs(maxTheta4), Math.abs(minTheta4));
-        const newXaxis_rotated = new Vector3(1,0,0);
-        newXaxis_rotated.applyQuaternion(quaternion90AroundZ.clone().conjugate()).applyQuaternion(facingBoxToCameraQuaternion).applyQuaternion(cameraToWorldQuaternion);
-        const isBoxAcrossTheta4HalfPlane: boolean = _localBox.intersectsPlane(new Plane(newXaxis_rotated,-newXaxis_rotated.dot(cameraPosition))) && (boxMinInCameraCoordinates.clone().applyQuaternion(cameraToFacingBoxQuaternion).applyQuaternion(quaternion90AroundZ).z < 0);
-        if (isBoxAcrossTheta4HalfPlane){ 
-//          console.log("T4 - This SHOULD ALWAYS HAPPPEN : isBoxAcrossTheta4HalfPlane", isBoxAcrossTheta4HalfPlane);
-          let maxTheta4Neg = Math.max(...facingrotatedSphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
-          let minTheta4Pos = Math.min(...facingrotatedSphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
-          thetaAngle4 = 2*Math.PI - minTheta4Pos + maxTheta4Neg; 
-          thetaDistance4 = 0;
-        } else {
-//          if (faceDebug(bloup)){
-//            console.log("T4 - This SHOULD NOT HAPPPEN : isBoxAcrossTheta4HalfPlane", isBoxAcrossTheta4HalfPlane, "bloup :",bloup);
-            console.log("intersection : ", _localBox.intersectsPlane(new Plane(newXaxis_rotated,-newXaxis_rotated.dot(cameraPosition))));
-            console.log("z < 0", (boxMinInCameraCoordinates.clone().applyQuaternion(cameraToFacingBoxQuaternion).applyQuaternion(quaternion90AroundZ).z < 0));
-//          }
-            // voir theta 3
-            let maxTheta4Neg = Math.max(...facingrotatedSphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
-            let minTheta4Pos = Math.min(...facingrotatedSphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
-            thetaAngle4 = 2*Math.PI - minTheta4Pos + maxTheta4Neg; 
-            thetaDistance4 = 0;
-        }
-
-   
-        // ===========================
-
-
-        //sphericalAngularArea = Math.abs(thetaAngle2 * thetaAngle) /// (4 * Math.PI**2); // We normalize to be closer to the previous kind of values provided by ndc/ncc
-        sphericalAngularArea = Math.abs (thetaAngle3*thetaAngle4)
-
-        sphericalAngularDistance = new Vector2(thetaDistance, thetaDistance2).length();        
+        _vec3a.applyQuaternion(worldToCameraQuaternion);
         
-      } else{
-        //Priority is maximal if camera is inside the bounding box
-            sphericalDistanceWeight = 1;
+        const maxTheta3Neg = Math.max(...facingSphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
+        const minTheta3Pos = Math.min(...facingSphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
+        const thetaAngle3 = 2*Math.PI - minTheta3Pos + maxTheta3Neg; 
 
+
+        const maxTheta4Neg = Math.max(...facingrotatedSphericalCoordinates.filter((point: Spherical)=> point.theta<0).map((point: Spherical)=> point.theta));
+        const minTheta4Pos = Math.min(...facingrotatedSphericalCoordinates.filter((point: Spherical)=> point.theta>0).map((point: Spherical)=> point.theta));  
+        const thetaAngle4 = 2*Math.PI - minTheta4Pos + maxTheta4Neg; 
+
+        sphericalAngularArea = Math.abs (thetaAngle3*thetaAngle4)
+        sphericalAngularDistance = new Vector2(thetaDistance, thetaDistance2).length();        
       }
-
-      //_localBox.getSize(_vec3a);
-      _ndcBox.min.clampScalar(-1,1);
-      _ndcBox.max.clampScalar(-1,1);
-      _ndcBox.getSize(_vec3a);
-      let visibleSize = (_vec3a.x *_vec3a.y)/4;
       const depthMod = Math.max(1-distance, 0.1);
-      const angleMod = 1 - Math.abs(angle)/Math.PI;
+//    weights.push([model.ins.name.value, {distance, angle, depthMod, angleMod, visibleSize}]);
 
-      weights.push([model.ins.name.value, {distance, angle, depthMod, angleMod, visibleSize}]);
-
-      const oldWeight = depthMod*angleMod;
-      
-
-      ///======================== Spherical version===================================
-      //const sphericalAngleMod = sphericalAngularArea // TODO here => faire une formule de poids propre
       const sphericalAngleMod = (1 - Math.abs(sphericalAngularDistance/Math.sqrt(Math.PI**2 + Math.PI**2)));
-      let newWeight = depthMod * 2 * sphericalAngularArea * sphericalAngleMod
-      // console.log("Spherical LOD : Distance modifier :", depthMod.toString());
-      // console.log("Spherical LOD : Angular area :", sphericalAngularArea.toString());
-      // console.log("Spherical LOD : Field of view modifier on angular area", sphericalFieldOfViewWeight.toString());
-      //let sphericalWeight = depthMod * sphericalAngularArea ;
-      
-//     console.log("SphLOD n°", bloup.toString(), ":", {depthMod: depthMod, sphAngMod: sphericalAngleMod, sphAngArea: sphericalAngularArea,sphAngDistance: sphericalAngularDistance});
-      // console.log("SphLOD n°", bloup.toString(), ":", {newWeight: newWeight, previousWeigh: oldWeight});
-      const weight = newWeight;
+      const weight = depthMod * 2 * sphericalAngularArea * sphericalAngleMod
 
-//      console.log("Spherical LOD : Weight :", sphericalWeight.toString(), "Previous LOD : Weight :", weight.toString());
-      //// ==========================^^^^^^^^^^===================================
-
-      //Upgrade only here
+     //Upgrade only here
       let qualityRequest =  model.derivatives.select(EDerivativeUsage.Web3D, getQuality(model.ins.quality.value, sphericalAngularArea))?.data.quality;
-      if(model.isLoading()) currently_loading++;sphericalDistanceWeight
+      if(model.isLoading()) currently_loading++;
       return {model, clipped, weight, qualityRequest} as ModelDisplayState;
     })
     .sort((a, b)=> a.weight - b.weight) //Sort low weights first
